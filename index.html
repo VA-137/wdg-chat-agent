@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Happy Paws – ChatAgent Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!--
+    Consider enabling a CSP once domains are finalized (adjust connect-src).
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self';
+                   img-src 'self' data:;
+                   style-src 'self' 'unsafe-inline';
+                   script-src 'self';
+                   connect-src 'self' https://soz-1.app.n8n.cloud"> -->
+  <style>
+    :root { color-scheme: light dark; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#f8fafc;color:#111827}
+    .wrap{max-width:900px;margin:40px auto;padding:0 16px}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);padding:16px}
+    #log{height:360px;overflow:auto;border:1px solid #eee;border-radius:8px;padding:10px;background:#fafafa}
+    .row{margin:10px 0}
+    .lbl{font-size:12px;color:#6b7280;margin-bottom:4px}
+    .ctrls{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+    .btn{padding:8px 10px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}
+    .btn.secondary{background:#10b981}
+    .btn[disabled]{opacity:.6;cursor:not-allowed}
+    .composer{display:flex;gap:8px;margin-top:8px}
+    .composer input{flex:1;padding:10px;border:1px solid #e5e7eb;border-radius:8px}
+    .composer button{padding:10px 12px;border:0;border-radius:8px;background:#111827;color:#fff;cursor:pointer}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>Happy Paws – ChatAgent (Book + Calculator + FAQ)</h2>
+    <div class="card">
+      <div id="log" aria-live="polite" aria-atomic="false"></div>
+      <div class="ctrls">
+        <button id="btnBook" class="btn" type="button">Book Appointment</button>
+        <button id="btnCalc" class="btn secondary" type="button">Pricing Calculator</button>
+      </div>
+      <div class="composer">
+        <label for="inp" class="sr-only">Message</label>
+        <input id="inp" placeholder="Ask about services, pricing, policies…" autocomplete="off" />
+        <button id="send" type="button">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    const cfg = {
+      tenantId: "dogroomer-001",
+      // Use a base, not a leaf endpoint; endpoints are appended below.
+      backend: "https://soz-1.app.n8n.cloud/webhook-test"
+    };
+
+    // Stable session id
+    const key = "chatagents_sid";
+    let sid = localStorage.getItem(key);
+    if (!sid) {
+      // crypto for better entropy than Math.random
+      sid = Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
+      localStorage.setItem(key, sid);
+    }
+
+    const log = document.getElementById('log');
+    const inp = document.getElementById('inp');
+    const sendBtn = document.getElementById('send');
+    const btnBook = document.getElementById('btnBook');
+    const btnCalc = document.getElementById('btnCalc');
+
+    // Util: append a message safely (no innerHTML from untrusted data)
+    function append(role, content){
+      const row = document.createElement('div');
+      row.className = 'row';
+
+      const lbl = document.createElement('div');
+      lbl.className = 'lbl';
+      lbl.textContent = role === "user" ? "You" : "Assistant";
+
+      const body = document.createElement('div');
+      if (typeof content === 'string') {
+        body.textContent = content;
+      } else if (content instanceof Node) {
+        body.appendChild(content);
+      } else {
+        body.textContent = String(content ?? "");
+      }
+
+      row.appendChild(lbl);
+      row.appendChild(body);
+      log.appendChild(row);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // Util: create a validated external link
+    function safeLink(url, label){
+      try {
+        const u = new URL(url);
+        if (!/^https?:$/.test(u.protocol)) throw new Error("Unsupported protocol");
+        const a = document.createElement('a');
+        a.href = u.toString();
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = label || u.toString();
+        return a;
+      } catch {
+        return null;
+      }
+    }
+
+    // Fetch helper with robust error handling + defensive JSON parse
+    async function postJSON(path, payload){
+      try {
+        const r = await fetch(path, {
+          method: "POST",
+          headers: {"content-type":"application/json"},
+          body: JSON.stringify(payload)
+        });
+        if (!r.ok) {
+          throw new Error(`HTTP ${r.status}`);
+        }
+        const text = await r.text();
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error("Invalid JSON response");
+        }
+      } catch (e) {
+        append("assistant", `Network error: ${e.message}`);
+        throw e;
+      }
+    }
+
+    // Welcome line
+    append("assistant", "Welcome! Use Book Appointment or Pricing Calculator, or ask me anything about services, pricing, or policies.");
+
+    // BOOK
+    btnBook.addEventListener('click', async ()=>{
+      btnBook.disabled = true;
+      try {
+        const data = await postJSON(`${cfg.backend}/chat/tool/booking`, { tenantId: cfg.tenantId });
+        if (data && data.type === "cta" && data.url) {
+          const a = safeLink(data.url, "Book");
+          append("assistant", a || "Booking link looks invalid.");
+          // Leave opening to the user click to avoid popup blockers.
+        } else {
+          append("assistant", "Booking link not configured.");
+        }
+      } finally {
+        btnBook.disabled = false;
+      }
+    });
+
+    // CALCULATOR
+    btnCalc.addEventListener('click', async ()=>{
+      btnCalc.disabled = true;
+      try {
+        const data = await postJSON(`${cfg.backend}/chat/tool/calculator`, { tenantId: cfg.tenantId });
+        if (data && data.type === "link" && data.url) {
+          const a = safeLink(data.url, data.label || "Pricing Calculator");
+          append("assistant", a || "Calculator link looks invalid.");
+        } else {
+          append("assistant", data?.text || "Pricing calculator is coming soon. Ask me for a quick estimate.");
+        }
+      } finally {
+        btnCalc.disabled = false;
+      }
+    });
+
+    // CHAT
+    async function doSend(){
+      const text = inp.value.trim();
+      if (!text) return;
+      append("user", text);
+      inp.value = "";
+      sendBtn.disabled = true;
+
+      try {
+        const data = await postJSON(`${cfg.backend}/chat/chat`, {
+          tenantId: cfg.tenantId,
+          sessionId: sid,
+          message: text
+        });
+
+        if (data && data.type === "cta" && data.url) {
+          const a = safeLink(data.url, data.title || "Open link");
+          append("assistant", a || "Link looks invalid.");
+        } else if (data && data.type === "link" && data.url) {
+          const a = safeLink(data.url, data.label || "Open");
+          append("assistant", a || "Link looks invalid.");
+        } else if (data && typeof data.text === "string") {
+          append("assistant", data.text);
+        } else {
+          append("assistant", "Got it.");
+        }
+      } finally {
+        sendBtn.disabled = false;
+        inp.focus();
+      }
+    }
+
+    sendBtn.addEventListener('click', doSend);
+    inp.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') doSend(); });
+  })();
+  </script>
+</body>
+</html>
